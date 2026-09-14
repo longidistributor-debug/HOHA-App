@@ -1,380 +1,89 @@
 package com.hoha.analysis
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
+import android.app.*
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
-import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
+import android.os.*
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.webkit.WebView
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.Spinner
-import android.widget.TextView
-import org.json.JSONArray
+import android.webkit.WebViewClient
+import android.widget.*
 import org.json.JSONObject
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 import kotlin.concurrent.thread
 import kotlin.math.abs
 
 class OverlayService : Service() {
-    private lateinit var windowManager: WindowManager
-    private lateinit var bubbleView: TextView
+    private lateinit var wm: WindowManager
+    private lateinit var bubble: TextView
     private var panel: LinearLayout? = null
     private var chart: WebView? = null
-    private var statusView: TextView? = null
-    private var counterView: TextView? = null
+    private var status: TextView? = null
+    private var counter: TextView? = null
     private var symbol = "EURUSD"
     private var period = "15m"
+    private var chartReady = false
     private var busy = false
-
     private val prefs by lazy { getSharedPreferences("hoha", MODE_PRIVATE) }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?) = null
+    override fun onCreate() { super.onCreate(); wm = getSystemService(WINDOW_SERVICE) as WindowManager; foreground(); createBubble() }
 
-    override fun onCreate() {
-        super.onCreate()
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        startAsForeground()
-        createBubble()
+    private fun foreground() {
+        val id="hoha"
+        if(Build.VERSION.SDK_INT>=26)(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(id,"HOHA",NotificationManager.IMPORTANCE_LOW))
+        val n=(if(Build.VERSION.SDK_INT>=26) Notification.Builder(this,id) else Notification.Builder(this)).setContentTitle("HOHA running").setContentText("Floating forex analysis active").setSmallIcon(android.R.drawable.ic_menu_compass).build()
+        startForeground(109,n)
     }
 
-    private fun startAsForeground() {
-        val channelId = "hoha"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(
-                NotificationChannel(channelId, "HOHA", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
+    private fun type()=if(Build.VERSION.SDK_INT>=26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
 
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, channelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-
-        val notification = builder
-            .setContentTitle("HOHA running")
-            .setContentText("Floating forex analysis active")
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .build()
-
-        startForeground(109, notification)
+    private fun createBubble(){
+        bubble=TextView(this).apply{text="H";textSize=24f;gravity=Gravity.CENTER;setTextColor(Color.BLACK);setTypeface(typeface,Typeface.BOLD);elevation=dp(8).toFloat();background=GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(Color.WHITE);setStroke(dp(2),Color.GRAY)}}
+        val p=WindowManager.LayoutParams(dp(58),dp(58),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.START;x=dp(18);y=dp(220)}
+        var sx=0;var sy=0;var tx=0f;var ty=0f;var moved=false
+        bubble.setOnTouchListener { _,e -> when(e.action){
+            MotionEvent.ACTION_DOWN->{sx=p.x;sy=p.y;tx=e.rawX;ty=e.rawY;moved=false;true}
+            MotionEvent.ACTION_MOVE->{val dx=(e.rawX-tx).toInt();val dy=(e.rawY-ty).toInt();if(abs(dx)>dp(4)||abs(dy)>dp(4))moved=true;p.x=sx+dx;p.y=sy+dy;wm.updateViewLayout(bubble,p);true}
+            MotionEvent.ACTION_UP->{if(!moved)toggle();true}
+            else->false}}
+        wm.addView(bubble,p)
     }
 
-    private fun overlayType(): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
+    private fun toggle(){if(panel==null)showPanel()else hidePanel()}
 
-    private fun createBubble() {
-        bubbleView = TextView(this).apply {
-            text = "H"
-            textSize = 24f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            setTypeface(typeface, Typeface.BOLD)
-            elevation = dp(8).toFloat()
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.BLACK)
-                setStroke(dp(2), Color.WHITE)
-            }
-        }
-
-        val params = WindowManager.LayoutParams(
-            dp(58),
-            dp(58),
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = dp(20)
-            y = dp(250)
-        }
-
-        var startX = 0
-        var startY = 0
-        var touchX = 0f
-        var touchY = 0f
-        var moved = false
-
-        bubbleView.setOnTouchListener { _, event ->
-            when (event.action) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    startX = params.x
-                    startY = params.y
-                    touchX = event.rawX
-                    touchY = event.rawY
-                    moved = false
-                    true
-                }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - touchX).toInt()
-                    val dy = (event.rawY - touchY).toInt()
-                    if (abs(dx) > dp(4) || abs(dy) > dp(4)) moved = true
-                    params.x = startX + dx
-                    params.y = startY + dy
-                    windowManager.updateViewLayout(bubbleView, params)
-                    true
-                }
-                android.view.MotionEvent.ACTION_UP -> {
-                    if (!moved) togglePanel()
-                    true
-                }
-                else -> false
-            }
-        }
-
-        windowManager.addView(bubbleView, params)
+    private fun showPanel(){
+        val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(12));background=GradientDrawable().apply{setColor(Color.rgb(8,8,8));cornerRadius=dp(18).toFloat();setStroke(dp(1),Color.GRAY)}};panel=root
+        val titleRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};titleRow.addView(text("HOHA • HAMAD ANALYSIS",16f,true),LinearLayout.LayoutParams(0,dp(42),1f));titleRow.addView(Button(this).apply{text="—";setOnClickListener{hidePanel()}},LinearLayout.LayoutParams(dp(48),dp(40)));root.addView(titleRow)
+        val symbols=arrayOf("EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","USDCHF","NZDUSD","EURJPY","GBPJPY","XAUUSD");val periods=arrayOf("5m","15m","30m","1h","4h","1D")
+        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};val sp=Spinner(this).apply{adapter=ArrayAdapter(this@OverlayService,android.R.layout.simple_spinner_dropdown_item,symbols)};val tf=Spinner(this).apply{adapter=ArrayAdapter(this@OverlayService,android.R.layout.simple_spinner_dropdown_item,periods);setSelection(1)};row.addView(sp,LinearLayout.LayoutParams(0,dp(48),1f));row.addView(tf,LinearLayout.LayoutParams(0,dp(48),1f));root.addView(row)
+        chart=WebView(this).apply{settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK);webViewClient=object:WebViewClient(){override fun onPageFinished(view:WebView?,url:String?){chartReady=true;initChart()}};loadUrl("file:///android_asset/chart.html")};root.addView(chart,LinearLayout.LayoutParams(-1,dp(300)))
+        counter=text("Calls: ${usage()}/500",11f,true);root.addView(counter)
+        val run=Button(this).apply{text="RUN WEIGHTED ANALYSIS";setTextColor(Color.BLACK);setBackgroundColor(Color.WHITE);setOnClickListener{analyze()}};root.addView(run,LinearLayout.LayoutParams(-1,dp(50)))
+        status=text("Interactive chart ready. Run analysis for Entry / SL / TP.",11f);status?.setPadding(0,dp(8),0,0);root.addView(status)
+        sp.onItemSelectedListener=Sel{symbol=symbols[it];changeMarket()};tf.onItemSelectedListener=Sel{period=periods[it];changeMarket()}
+        val p=WindowManager.LayoutParams(dp(360),dp(610),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.END;x=dp(8);y=dp(55)};wm.addView(root,p)
     }
 
-    private fun togglePanel() {
-        if (panel == null) showPanel() else hidePanel()
+    private fun initChart(){if(!chartReady)return;val key=prefs.getString("api_key","").orEmpty();if(key.isBlank())return;val socket=prefs.getString("socket_key","").orEmpty();chart?.evaluateJavascript("initLiveChart(${JSONObject.quote(key)},${JSONObject.quote(symbol)},${JSONObject.quote(period)},${JSONObject.quote(socket)})",null)}
+    private fun changeMarket(){if(chartReady)chart?.evaluateJavascript("changeMarket(${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null)}
+    private fun hidePanel(){panel?.let{runCatching{wm.removeView(it)}};panel=null;chart=null;status=null;counter=null;chartReady=false}
+
+    private fun analyze(){
+        if(busy)return;val key=prefs.getString("api_key","").orEmpty().trim();if(key.isBlank()){status?.text="API key missing";return};if(usage()>=500){status?.text="500/500 monthly calls reached";return};busy=true;status?.text="Scoring $symbol $period..."
+        thread{try{val(data,credits)=FcsClient.history(key,symbol,period,180);add(credits);val s=AnalysisEngine.analyze(data);Handler(Looper.getMainLooper()).post{counter?.text="Calls: ${usage()}/500";showSignal(s);status?.text=format(s);busy=false}}catch(e:Exception){Handler(Looper.getMainLooper()).post{status?.text="Request failed: ${e.message}";busy=false}}}
     }
 
-    private fun showPanel() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(12))
-            background = GradientDrawable().apply {
-                setColor(Color.rgb(8, 8, 8))
-                cornerRadius = dp(18).toFloat()
-                setStroke(dp(2), Color.WHITE)
-            }
-        }
-        panel = root
-
-        val titleRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        titleRow.addView(
-            makeText("HOHA • HAMAD ANALYSIS", 18f, true),
-            LinearLayout.LayoutParams(0, dp(44), 1f)
-        )
-        val close = Button(this).apply {
-            text = "—"
-            setOnClickListener { hidePanel() }
-        }
-        titleRow.addView(close, LinearLayout.LayoutParams(dp(48), dp(42)))
-        root.addView(titleRow)
-
-        val symbols = arrayOf(
-            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
-            "USDCHF", "NZDUSD", "EURJPY", "GBPJPY", "XAUUSD"
-        )
-        val timeframes = arrayOf("5m", "15m", "30m", "1h", "4h", "1D")
-
-        val selectorRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val symbolSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@OverlayService,
-                android.R.layout.simple_spinner_dropdown_item,
-                symbols
-            )
-        }
-        val timeframeSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@OverlayService,
-                android.R.layout.simple_spinner_dropdown_item,
-                timeframes
-            )
-            setSelection(1)
-        }
-        selectorRow.addView(symbolSpinner, LinearLayout.LayoutParams(0, dp(50), 1f))
-        selectorRow.addView(timeframeSpinner, LinearLayout.LayoutParams(0, dp(50), 1f))
-        root.addView(selectorRow)
-
-        chart = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            setBackgroundColor(Color.BLACK)
-            loadUrl("file:///android_asset/chart.html")
-        }
-        root.addView(chart, LinearLayout.LayoutParams(-1, dp(270)))
-
-        counterView = makeText("Calls: ${usage()}/500", 12f, true)
-        root.addView(counterView)
-
-        val runButton = Button(this).apply {
-            text = "RUN ANALYSIS"
-            setTextColor(Color.BLACK)
-            setBackgroundColor(Color.WHITE)
-            setOnClickListener { analyze() }
-        }
-        root.addView(runButton, LinearLayout.LayoutParams(-1, dp(52)))
-
-        statusView = makeText("Waiting for analysis…", 12f)
-        root.addView(statusView)
-
-        symbolSpinner.onItemSelectedListener = SelectionListener { symbol = symbols[it] }
-        timeframeSpinner.onItemSelectedListener = SelectionListener { period = timeframes[it] }
-
-        val params = WindowManager.LayoutParams(
-            dp(350),
-            dp(570),
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = dp(10)
-            y = dp(80)
-        }
-        windowManager.addView(root, params)
-    }
-
-    private fun hidePanel() {
-        panel?.let { runCatching { windowManager.removeView(it) } }
-        panel = null
-        chart = null
-        statusView = null
-        counterView = null
-    }
-
-    private fun analyze() {
-        if (busy) return
-        val key = prefs.getString("api_key", "").orEmpty().trim()
-        if (key.isBlank()) {
-            statusView?.text = "API key missing"
-            return
-        }
-        if (usage() >= 500) {
-            statusView?.text = "500/500 monthly calls reached"
-            return
-        }
-
-        busy = true
-        statusView?.text = "Analyzing $symbol $period…"
-
-        thread {
-            try {
-                val (data, credits) = FcsClient.history(key, symbol, period, 180)
-                addUsage(credits.coerceAtLeast(1))
-                val signal = AnalysisEngine.analyze(data)
-                Handler(Looper.getMainLooper()).post {
-                    counterView?.text = "Calls: ${usage()}/500"
-                    render(data, signal)
-                    statusView?.text = formatSignal(signal)
-                }
-            } catch (e: Exception) {
-                Handler(Looper.getMainLooper()).post {
-                    statusView?.text = "Request failed: ${e.message ?: "Unknown error"}"
-                }
-            } finally {
-                busy = false
-            }
-        }
-    }
-
-    private fun render(data: List<Candle>, signal: Signal?) {
-        val array = JSONArray()
-        data.takeLast(120).forEach {
-            array.put(
-                JSONObject()
-                    .put("o", it.o)
-                    .put("h", it.h)
-                    .put("l", it.l)
-                    .put("c", it.c)
-            )
-        }
-        val dataJson = JSONObject.quote(array.toString())
-        chart?.evaluateJavascript("setData($dataJson)", null)
-
-        if (signal == null) {
-            chart?.evaluateJavascript("setSignal(null)", null)
-        } else {
-            val signalJson = JSONObject()
-                .put("entry", signal.entry)
-                .put("sl", signal.sl)
-                .put("tp1", signal.tp1)
-                .put("tp2", signal.tp2)
-                .toString()
-            chart?.evaluateJavascript("setSignal(${JSONObject.quote(signalJson)})", null)
-        }
-    }
-
-    private fun formatSignal(signal: Signal?): String {
-        if (signal == null) return "NO VALID SETUP\nWaiting for next analysis."
-        val decimals = if (abs(signal.entry) >= 100) 2 else 5
-        fun price(value: Double) = String.format(Locale.US, "%.${decimals}f", value)
-        val reasons = signal.reasons.joinToString("\n") { "✓ $it" }
-        return "${signal.direction} • SCORE ${signal.score}/100\n" +
-            "Entry ${price(signal.entry)}\n" +
-            "SL ${price(signal.sl)}\n" +
-            "TP1 ${price(signal.tp1)}\n" +
-            "TP2 ${price(signal.tp2)}\n" + reasons
-    }
-
-    private fun currentMonth(): String =
-        SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
-
-    private fun usage(): Int {
-        val month = currentMonth()
-        if (prefs.getString("usage_month", "") != month) {
-            prefs.edit()
-                .putString("usage_month", month)
-                .putInt("usage", 0)
-                .apply()
-        }
-        return prefs.getInt("usage", 0)
-    }
-
-    private fun addUsage(count: Int) {
-        prefs.edit().putInt("usage", usage() + count).apply()
-    }
-
-    private fun makeText(value: String, size: Float, bold: Boolean = false): TextView =
-        TextView(this).apply {
-            text = value
-            textSize = size
-            setTextColor(Color.WHITE)
-            if (bold) setTypeface(typeface, Typeface.BOLD)
-        }
-
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
-
-    override fun onDestroy() {
-        hidePanel()
-        if (::bubbleView.isInitialized) {
-            runCatching { windowManager.removeView(bubbleView) }
-        }
-        super.onDestroy()
-    }
-
-    private class SelectionListener(
-        private val onSelected: (Int) -> Unit
-    ) : AdapterView.OnItemSelectedListener {
-        override fun onItemSelected(
-            parent: AdapterView<*>?,
-            view: View?,
-            position: Int,
-            id: Long
-        ) {
-            onSelected(position)
-        }
-
-        override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-    }
+    private fun showSignal(s:Signal?){if(s==null){chart?.evaluateJavascript("setSignal(null)",null);return};val j=JSONObject().put("entry",s.entry).put("sl",s.sl).put("tp1",s.tp1).put("tp2",s.tp2);chart?.evaluateJavascript("setSignal(${JSONObject.quote(j.toString())})",null)}
+    private fun format(s:Signal?):String{if(s==null)return "WAIT / NO EDGE\nBUY and SELL evidence is too balanced.";val d=if(abs(s.entry)>=100)2 else 5;fun f(v:Double)=String.format(Locale.US,"%.${d}f",v);val conf=when{ s.score>=80->"HIGH";s.score>=65->"MEDIUM";else->"EARLY"};return "${s.direction} • $conf • ${s.score}/100\nEntry ${f(s.entry)}\nSL ${f(s.sl)}\nTP1 ${f(s.tp1)}\nTP2 ${f(s.tp2)}\n"+s.reasons.take(6).joinToString("\n"){"✓ $it"}}
+    private fun month()=SimpleDateFormat("yyyy-MM",Locale.US).format(Date());private fun usage():Int{val m=month();if(prefs.getString("usage_month","")!=m)prefs.edit().putString("usage_month",m).putInt("usage",0).apply();return prefs.getInt("usage",0)};private fun add(n:Int)=prefs.edit().putInt("usage",usage()+n.coerceAtLeast(1)).apply();private fun text(s:String,z:Float,b:Boolean=false)=TextView(this).apply{text=s;textSize=z;setTextColor(Color.WHITE);if(b)setTypeface(typeface,Typeface.BOLD)};private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
+    override fun onDestroy(){hidePanel();if(::bubble.isInitialized)runCatching{wm.removeView(bubble)};super.onDestroy()}
+    private class Sel(val f:(Int)->Unit):AdapterView.OnItemSelectedListener{override fun onItemSelected(p:AdapterView<*>?,v:View?,i:Int,id:Long)=f(i);override fun onNothingSelected(p:AdapterView<*>?){}}
 }
