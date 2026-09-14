@@ -77,13 +77,48 @@ class OverlayService : Service() {
     private fun hidePanel(){panel?.let{runCatching{wm.removeView(it)}};panel=null;chart=null;status=null;counter=null;chartReady=false}
 
     private fun analyze(){
-        if(busy)return;val key=prefs.getString("api_key","").orEmpty().trim();if(key.isBlank()){status?.text="API key missing";return};if(usage()>=500){status?.text="500/500 monthly calls reached";return};busy=true;status?.text="Scoring $symbol $period..."
-        thread{try{val(data,credits)=FcsClient.history(key,symbol,period,180);add(credits);val s=AnalysisEngine.analyze(data);Handler(Looper.getMainLooper()).post{counter?.text="Calls: ${usage()}/500";showSignal(s);status?.text=format(s);busy=false}}catch(e:Exception){Handler(Looper.getMainLooper()).post{status?.text="Request failed: ${e.message}";busy=false}}}
+        if(busy)return
+        val key=prefs.getString("api_key","").orEmpty().trim()
+        if(key.isBlank()){status?.text="API key missing";return}
+        if(usage()>=500){status?.text="500/500 monthly calls reached";return}
+        busy=true
+        status?.text="Scoring $symbol $period..."
+        thread{
+            try{
+                val(data,credits)=FcsClient.history(key,symbol,period,180)
+                add(credits)
+                val s=AnalysisEngine.analyze(data)
+                Handler(Looper.getMainLooper()).post{counter?.text="Calls: ${usage()}/500";showSignal(s);status?.text=format(s);busy=false}
+            }catch(e:Exception){
+                Handler(Looper.getMainLooper()).post{status?.text="Request failed: ${e.message}";busy=false}
+            }
+        }
     }
 
-    private fun showSignal(s:Signal?){if(s==null){chart?.evaluateJavascript("setSignal(null)",null);return};val j=JSONObject().put("entry",s.entry).put("sl",s.sl).put("tp1",s.tp1).put("tp2",s.tp2);chart?.evaluateJavascript("setSignal(${JSONObject.quote(j.toString())})",null)}
-    private fun format(s:Signal?):String{if(s==null)return "WAIT / NO EDGE\nBUY and SELL evidence is too balanced.";val d=if(abs(s.entry)>=100)2 else 5;fun f(v:Double)=String.format(Locale.US,"%.${d}f",v);val conf=when{ s.score>=80->"HIGH";s.score>=65->"MEDIUM";else->"EARLY"};return "${s.direction} • $conf • ${s.score}/100\nEntry ${f(s.entry)}\nSL ${f(s.sl)}\nTP1 ${f(s.tp1)}\nTP2 ${f(s.tp2)}\n"+s.reasons.take(6).joinToString("\n"){"✓ $it"}}
-    private fun month()=SimpleDateFormat("yyyy-MM",Locale.US).format(Date());private fun usage():Int{val m=month();if(prefs.getString("usage_month","")!=m)prefs.edit().putString("usage_month",m).putInt("usage",0).apply();return prefs.getInt("usage",0)};private fun add(n:Int)=prefs.edit().putInt("usage",usage()+n.coerceAtLeast(1)).apply();private fun text(s:String,z:Float,b:Boolean=false)=TextView(this).apply{text=s;textSize=z;setTextColor(Color.WHITE);if(b)setTypeface(typeface,Typeface.BOLD)};private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
+    private fun showSignal(s:Signal?){
+        if(s==null){chart?.evaluateJavascript("setSignal(null)",null);return}
+        val j=JSONObject().put("entry",s.entry).put("sl",s.sl).put("tp1",s.tp1).put("tp2",s.tp2)
+        chart?.evaluateJavascript("setSignal(${JSONObject.quote(j.toString())})",null)
+    }
+
+    private fun format(s:Signal?):String{
+        if(s==null) return "WAIT / NO EDGE\nBUY and SELL evidence is too balanced."
+        val d = if(abs(s.entry)>=100) 2 else 5
+        fun f(v:Double):String = String.format(Locale.US,"%.${d}f",v)
+        val conf = when {
+            s.score >= 80 -> "HIGH"
+            s.score >= 65 -> "MEDIUM"
+            else -> "EARLY"
+        }
+        val reasons = s.reasons.take(6).joinToString("\n") { "✓ $it" }
+        return "${s.direction} • $conf • ${s.score}/100\nEntry ${f(s.entry)}\nSL ${f(s.sl)}\nTP1 ${f(s.tp1)}\nTP2 ${f(s.tp2)}\n$reasons"
+    }
+
+    private fun month()=SimpleDateFormat("yyyy-MM",Locale.US).format(Date())
+    private fun usage():Int{val m=month();if(prefs.getString("usage_month","")!=m)prefs.edit().putString("usage_month",m).putInt("usage",0).apply();return prefs.getInt("usage",0)}
+    private fun add(n:Int)=prefs.edit().putInt("usage",usage()+n.coerceAtLeast(1)).apply()
+    private fun text(s:String,z:Float,b:Boolean=false)=TextView(this).apply{text=s;textSize=z;setTextColor(Color.WHITE);if(b)setTypeface(typeface,Typeface.BOLD)}
+    private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
     override fun onDestroy(){hidePanel();if(::bubble.isInitialized)runCatching{wm.removeView(bubble)};super.onDestroy()}
     private class Sel(val f:(Int)->Unit):AdapterView.OnItemSelectedListener{override fun onItemSelected(p:AdapterView<*>?,v:View?,i:Int,id:Long)=f(i);override fun onNothingSelected(p:AdapterView<*>?){}}
 }
