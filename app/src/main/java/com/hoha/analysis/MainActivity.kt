@@ -14,6 +14,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.*
@@ -30,7 +31,6 @@ class MainActivity : Activity() {
     private lateinit var usageText: TextView
     private lateinit var apiKey: EditText
     private lateinit var socketKey: EditText
-    private lateinit var symbolInput: EditText
     private var selectedSymbol = "EURUSD"
     private var selectedPeriod = "15m"
     private var busy = false
@@ -39,6 +39,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         selectedSymbol = prefs.getString("selected_symbol", "EURUSD").orEmpty().ifBlank { "EURUSD" }
+        selectedPeriod = prefs.getString("selected_period", "15m").orEmpty().ifBlank { "15m" }
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
         window.statusBarColor = Color.BLACK
         window.navigationBarColor = Color.BLACK
@@ -60,23 +61,8 @@ class MainActivity : Activity() {
         socketKey=input("FCS Socket Key (optional for true live ticks)", prefs.getString("socket_key","").orEmpty())
         keyCard.addView(apiKey, LinearLayout.LayoutParams(-1,dp(52)))
         keyCard.addView(socketKey, LinearLayout.LayoutParams(-1,dp(52)).apply{topMargin=dp(8)})
-        val save=Button(this).apply { text="SAVE KEYS + LOAD CHART"; setTextColor(Color.BLACK); background=rounded(Color.WHITE,dp(12).toFloat()); setOnClickListener { saveKeys(); applySymbol(); initChart() } }
+        val save=Button(this).apply { text="SAVE KEYS + LOAD CHART"; setTextColor(Color.BLACK); background=rounded(Color.WHITE,dp(12).toFloat()); setOnClickListener { saveKeys(); initChart() } }
         keyCard.addView(save,LinearLayout.LayoutParams(-1,dp(50)).apply{topMargin=dp(10)}); root.addView(keyCard)
-
-        root.addView(sectionTitle("MARKET — TYPE ANY SUPPORTED SYMBOL"))
-        val selector=card()
-        symbolInput=input("Symbol e.g. XAUUSD, EURUSD, GBPJPY", selectedSymbol).apply {
-            setSelectAllOnFocus(true)
-        }
-        selector.addView(symbolInput, LinearLayout.LayoutParams(-1,dp(52)))
-        val periods=arrayOf("1m","5m","15m","30m","1h","4h","1D")
-        val tf=makeSpinner(periods).apply{setSelection(2)}
-        selector.addView(tf,LinearLayout.LayoutParams(-1,dp(52)).apply{topMargin=dp(8)})
-        val load=Button(this).apply { text="LOAD SYMBOL"; setTextColor(Color.BLACK); background=rounded(Color.WHITE,dp(12).toFloat()); setOnClickListener { applySymbol(); changeChartMarket() } }
-        selector.addView(load,LinearLayout.LayoutParams(-1,dp(50)).apply{topMargin=dp(8)})
-        selector.addView(label("Forex pairs and commodities are auto-resolved. Gold: XAUUSD. Reverse forex pairs use FCS synthetic fallback when available.",10f,false,Color.GRAY),LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
-        root.addView(selector)
-        tf.onItemSelectedListener=listener { selectedPeriod=periods[it]; changeChartMarket() }
 
         root.addView(sectionTitle("INTERACTIVE MARKET CHART"))
         val chartCard=card()
@@ -84,11 +70,12 @@ class MainActivity : Activity() {
             settings.javaScriptEnabled=true
             settings.domStorageEnabled=true
             setBackgroundColor(Color.BLACK)
+            addJavascriptInterface(ChartBridge(), "HOHAAndroid")
             webViewClient=object:WebViewClient(){ override fun onPageFinished(view:WebView?,url:String?){ chartReady=true; initChart() } }
             loadUrl("file:///android_asset/chart.html")
         }
-        chartCard.addView(chart,LinearLayout.LayoutParams(-1,dp(420)))
-        chartCard.addView(label("The chart resolves the exact FCS exchange ticker automatically. True tick streaming activates only with a valid FCS Socket Key.",10f,false,Color.GRAY),LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
+        chartCard.addView(chart,LinearLayout.LayoutParams(-1,dp(470)))
+        chartCard.addView(label("Use the chart's own symbol search and timeframe controls. Forex, Gold/commodities, crypto and supported stocks can be searched inside the chart. HOHA analysis follows the symbol/timeframe selected in the chart.",10f,false,Color.GRAY),LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
         root.addView(chartCard)
 
         root.addView(sectionTitle("ANALYSIS"))
@@ -96,36 +83,41 @@ class MainActivity : Activity() {
         usageText=label("Calls: ${usage()}/500",12f,true,Color.LTGRAY); top.addView(usageText,LinearLayout.LayoutParams(0,-2,1f)); top.addView(label("REST quota",11f,false,Color.GRAY)); action.addView(top)
         val run=Button(this).apply { text="RUN WEIGHTED ANALYSIS"; setTypeface(typeface,Typeface.BOLD); setTextColor(Color.BLACK); background=rounded(Color.WHITE,dp(14).toFloat()); setOnClickListener{analyze()} }
         action.addView(run,LinearLayout.LayoutParams(-1,dp(56)).apply{topMargin=dp(12)})
-        resultText=label("READY\nType a symbol, load it, then run analysis.",13f,false,Color.WHITE).apply{setPadding(dp(14),dp(14),dp(14),dp(14));background=rounded(Color.rgb(16,16,16),dp(12).toFloat(),Color.rgb(55,55,55))}
+        resultText=label("READY\nLoad the chart, choose a symbol/timeframe inside the chart, then run analysis.",13f,false,Color.WHITE).apply{setPadding(dp(14),dp(14),dp(14),dp(14));background=rounded(Color.rgb(16,16,16),dp(12).toFloat(),Color.rgb(55,55,55))}
         action.addView(resultText,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(12)}); root.addView(action)
 
-        root.addView(sectionTitle("FLOATING MODE")); val fcard=card(); fcard.addView(label("Use the draggable H bubble over MT5. The selected typed symbol is shared with floating mode.",12f,false,Color.LTGRAY))
-        val fbtn=Button(this).apply{text="ENABLE HOHA FLOAT";setTextColor(Color.WHITE);background=rounded(Color.rgb(30,30,30),dp(14).toFloat(),Color.rgb(90,90,90));setOnClickListener{applySymbol();enableFloat()}}
+        root.addView(sectionTitle("FLOATING MODE")); val fcard=card(); fcard.addView(label("Use the draggable H bubble over MT5. The last chart-selected symbol/timeframe is shared with floating mode.",12f,false,Color.LTGRAY))
+        val fbtn=Button(this).apply{text="ENABLE HOHA FLOAT";setTextColor(Color.WHITE);background=rounded(Color.rgb(30,30,30),dp(14).toFloat(),Color.rgb(90,90,90));setOnClickListener{enableFloat()}}
         fcard.addView(fbtn,LinearLayout.LayoutParams(-1,dp(54)).apply{topMargin=dp(12)});root.addView(fcard)
 
         root.addView(sectionTitle("ENGINE INPUTS")); val engine=card(); engine.addView(label("EMA trend • RSI • MACD • ATR • BOS/breakout • CHoCH • liquidity sweep • FVG • displacement/order-block context • structural support/resistance • Bollinger position • short-term momentum",12f,false,Color.LTGRAY)); engine.addView(label("No single indicator is treated as certainty. Signals are weighted and probabilistic.",11f,false,Color.GRAY),LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)});root.addView(engine)
         return ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.BLACK);addView(root)}
     }
 
-    private fun normalizeSymbol(v:String):String = v.trim().uppercase().replace("/","").replace(" ","")
-    private fun applySymbol(){
-        val s=normalizeSymbol(symbolInput.text.toString())
-        if(s.isNotBlank()){
-            selectedSymbol=s
-            symbolInput.setText(s)
-            prefs.edit().putString("selected_symbol",s).apply()
+    inner class ChartBridge {
+        @JavascriptInterface fun onSymbolChanged(ticker:String) {
+            val clean=ticker.substringAfter(':').trim().uppercase()
+            if(clean.isNotBlank()) {
+                selectedSymbol=clean
+                prefs.edit().putString("selected_symbol",clean).apply()
+                runOnUiThread { resultText.text="CHART: $selectedSymbol • $selectedPeriod\nReady for weighted analysis." }
+            }
+        }
+        @JavascriptInterface fun onPeriodChanged(period:String) {
+            val p=period.trim().ifBlank { "15m" }
+            selectedPeriod=p
+            prefs.edit().putString("selected_period",p).apply()
+            runOnUiThread { resultText.text="CHART: $selectedSymbol • $selectedPeriod\nReady for weighted analysis." }
         }
     }
 
     private fun saveKeys(){ prefs.edit().putString("api_key",apiKey.text.toString().trim()).putString("socket_key",socketKey.text.toString().trim()).apply(); Toast.makeText(this,"Keys saved locally",Toast.LENGTH_SHORT).show() }
-    private fun initChart(){ if(!chartReady)return; val key=apiKey.text.toString().trim(); if(key.isBlank())return; applySymbol(); val socket=socketKey.text.toString().trim(); val js="initLiveChart(${JSONObject.quote(key)},${JSONObject.quote(selectedSymbol)},${JSONObject.quote(selectedPeriod)},${JSONObject.quote(socket)})"; chart.evaluateJavascript(js,null) }
-    private fun changeChartMarket(){ if(!::symbolInput.isInitialized)return; applySymbol(); if(chartReady) chart.evaluateJavascript("changeMarket(${JSONObject.quote(selectedSymbol)},${JSONObject.quote(selectedPeriod)})",null) }
+    private fun initChart(){ if(!chartReady)return; val key=apiKey.text.toString().trim(); if(key.isBlank())return; val socket=socketKey.text.toString().trim(); val js="initLiveChart(${JSONObject.quote(key)},${JSONObject.quote(selectedSymbol)},${JSONObject.quote(selectedPeriod)},${JSONObject.quote(socket)})"; chart.evaluateJavascript(js,null) }
 
     private fun analyze(){
         if(busy)return
-        applySymbol()
-        val key=apiKey.text.toString().trim(); if(key.isBlank()){resultText.text="API KEY REQUIRED";return}; if(selectedSymbol.isBlank()){resultText.text="SYMBOL REQUIRED";return}; if(usage()>=500){resultText.text="MONTHLY LIMIT REACHED\n500/500 FCS calls used.";return}
-        saveKeys(); busy=true; resultText.text="ANALYZING $selectedSymbol • $selectedPeriod\nTrying exact market type + fallback if required..."
+        val key=apiKey.text.toString().trim(); if(key.isBlank()){resultText.text="API KEY REQUIRED";return}; if(usage()>=500){resultText.text="MONTHLY LIMIT REACHED\n500/500 FCS calls used.";return}
+        saveKeys(); busy=true; resultText.text="ANALYZING $selectedSymbol • $selectedPeriod\nScoring weighted confirmations..."
         thread {
             try {
                 val (data,credits)=FcsClient.history(key,selectedSymbol,selectedPeriod,180); addUsage(credits)
@@ -157,8 +149,6 @@ class MainActivity : Activity() {
     private fun input(h:String,v:String)=EditText(this).apply{hint=h;setHintTextColor(Color.DKGRAY);setTextColor(Color.WHITE);textSize=13f;setSingleLine(true);setText(v);background=rounded(Color.rgb(24,24,24),dp(12).toFloat(),Color.rgb(60,60,60));setPadding(dp(14),0,dp(14),0)}
     private fun sectionTitle(t:String)=label(t,11f,true,Color.GRAY).apply{setPadding(dp(2),dp(18),0,dp(8))}
     private fun card()=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(14),dp(14),dp(14));background=rounded(Color.rgb(10,10,10),dp(16).toFloat(),Color.rgb(45,45,45))}
-    private fun makeSpinner(items:Array<String>)=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,items);background=rounded(Color.rgb(24,24,24),dp(12).toFloat(),Color.rgb(65,65,65));setPadding(dp(10),0,dp(8),0)}
-    private fun listener(block:(Int)->Unit)=object:AdapterView.OnItemSelectedListener{override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long)=block(pos);override fun onNothingSelected(p:AdapterView<*>?){}}
     private fun label(t:String,s:Float,b:Boolean=false,c:Int=Color.WHITE)=TextView(this).apply{text=t;textSize=s;setTextColor(c);if(b)setTypeface(typeface,Typeface.BOLD)}
     private fun rounded(fill:Int,r:Float,stroke:Int?=null)=GradientDrawable().apply{setColor(fill);cornerRadius=r;if(stroke!=null)setStroke(dp(1),stroke)}
     private fun circle(fill:Int)=GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(fill);setStroke(dp(2),Color.rgb(130,130,130))}
