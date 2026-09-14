@@ -118,11 +118,22 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showSignalOnChart(signal:Signal?){ if(signal==null){chart.evaluateJavascript("setSignal(null)",null);return}; val s=JSONObject().put("entry",signal.entry).put("sl",signal.sl).put("tp1",signal.tp1).put("tp2",signal.tp2); chart.evaluateJavascript("setSignal(${JSONObject.quote(s.toString())})",null) }
+    private fun showSignalOnChart(signal:Signal?){
+        if(signal==null){chart.evaluateJavascript("setSignal(null)",null);return}
+        val s=JSONObject().put("entry",signal.entry).put("sl",signal.sl).put("tp1",signal.tp1).put("tp2",signal.tp2)
+        chart.evaluateJavascript("setSignal(${JSONObject.quote(s.toString())})",null)
+    }
 
     private fun formatSignal(s:Signal?):String{
-        if(s==null)return "WAIT / NO EDGE\nThe current BUY and SELL evidence is too balanced. This is intentionally different from requiring every indicator to match."
-        val d=if(abs(s.entry)>=100)2 else 5; fun f(v:Double)=String.format(Locale.US,"%.${d}f",v); val confidence=when{ s.score>=80->"HIGH"; s.score>=65->"MEDIUM"; else->"EARLY" }; val reasons=s.reasons.joinToString("\n"){"✓ $it"}
+        if(s==null) return "WAIT / NO EDGE\nThe current BUY and SELL evidence is too balanced. This is intentionally different from requiring every indicator to match."
+        val d = if(abs(s.entry)>=100) 2 else 5
+        fun f(v:Double):String = String.format(Locale.US,"%.${d}f",v)
+        val confidence = when {
+            s.score >= 80 -> "HIGH"
+            s.score >= 65 -> "MEDIUM"
+            else -> "EARLY"
+        }
+        val reasons=s.reasons.joinToString("\n") { "✓ $it" }
         return "${s.direction} SETUP • $confidence • ${s.score}/100\n\nENTRY  ${f(s.entry)}\nSL  ${f(s.sl)}\nTP1  ${f(s.tp1)}\nTP2  ${f(s.tp2)}\nVALID  ~${s.validBars} candles\n\nWHY\n$reasons"
     }
 
