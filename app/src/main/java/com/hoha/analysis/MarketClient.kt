@@ -19,14 +19,16 @@ object MarketClient {
             "stock" -> fetchGroup("stock","stock",accessKey,q,120) to 1
             "fund" -> fetchGroup("stock","fund",accessKey,q,120) to 1
             "index" -> fetchGroup("stock","index",accessKey,q,120) to 1
-            else -> {
-                val out=mutableListOf<Instrument>()
-                out += fetchGroup("forex","forex",accessKey,q,40)
-                out += fetchGroup("forex","commodity",accessKey,q,40)
-                out += fetchGroup("crypto","crypto",accessKey,q,40)
-                out += fetchGroup("stock","stock",accessKey,q,40)
-                out.distinctBy{it.ticker}.take(160) to 4
-            }
+            else -> fetchAllSafe(accessKey,q) to 1
+        }
+    }
+
+    private fun fetchAllSafe(key:String,q:String):List<Instrument>{
+        return if(q.isBlank()) {
+            fetchGroup("forex","forex",key,"",120)
+        } else {
+            val path="forex/search?search=${enc(q)}&page=1&per_page=120"
+            parse(request(path,key),"forex",120)
         }
     }
 
