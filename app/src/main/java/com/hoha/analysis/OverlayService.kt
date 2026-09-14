@@ -27,6 +27,7 @@ class OverlayService : Service() {
     private var chart: WebView? = null
     private var status: TextView? = null
     private var counter: TextView? = null
+    private var symbolEdit: EditText? = null
     private var symbol = "EURUSD"
     private var period = "15m"
     private var chartReady = false
@@ -34,7 +35,13 @@ class OverlayService : Service() {
     private val prefs by lazy { getSharedPreferences("hoha", MODE_PRIVATE) }
 
     override fun onBind(intent: Intent?) = null
-    override fun onCreate() { super.onCreate(); wm = getSystemService(WINDOW_SERVICE) as WindowManager; foreground(); createBubble() }
+    override fun onCreate() {
+        super.onCreate()
+        symbol = prefs.getString("selected_symbol", "EURUSD").orEmpty().ifBlank { "EURUSD" }
+        wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        foreground()
+        createBubble()
+    }
 
     private fun foreground() {
         val id="hoha"
@@ -62,22 +69,35 @@ class OverlayService : Service() {
     private fun showPanel(){
         val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(12));background=GradientDrawable().apply{setColor(Color.rgb(8,8,8));cornerRadius=dp(18).toFloat();setStroke(dp(1),Color.GRAY)}};panel=root
         val titleRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};titleRow.addView(text("HOHA • HAMAD ANALYSIS",16f,true),LinearLayout.LayoutParams(0,dp(42),1f));titleRow.addView(Button(this).apply{text="—";setOnClickListener{hidePanel()}},LinearLayout.LayoutParams(dp(48),dp(40)));root.addView(titleRow)
-        val symbols=arrayOf("EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","USDCHF","NZDUSD","EURJPY","GBPJPY","XAUUSD");val periods=arrayOf("5m","15m","30m","1h","4h","1D")
-        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};val sp=Spinner(this).apply{adapter=ArrayAdapter(this@OverlayService,android.R.layout.simple_spinner_dropdown_item,symbols)};val tf=Spinner(this).apply{adapter=ArrayAdapter(this@OverlayService,android.R.layout.simple_spinner_dropdown_item,periods);setSelection(1)};row.addView(sp,LinearLayout.LayoutParams(0,dp(48),1f));row.addView(tf,LinearLayout.LayoutParams(0,dp(48),1f));root.addView(row)
+
+        symbolEdit=EditText(this).apply{setText(symbol);hint="XAUUSD / EURUSD / any supported symbol";setTextColor(Color.WHITE);setHintTextColor(Color.GRAY);setSingleLine(true);setPadding(dp(10),0,dp(10),0);background=GradientDrawable().apply{setColor(Color.rgb(25,25,25));cornerRadius=dp(10).toFloat();setStroke(dp(1),Color.DKGRAY)}}
+        root.addView(symbolEdit,LinearLayout.LayoutParams(-1,dp(46)))
+        val periods=arrayOf("1m","5m","15m","30m","1h","4h","1D")
+        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        val tf=Spinner(this).apply{adapter=ArrayAdapter(this@OverlayService,android.R.layout.simple_spinner_dropdown_item,periods);setSelection(2)}
+        val load=Button(this).apply{text="LOAD";setOnClickListener{applySymbol();changeMarket()}}
+        row.addView(tf,LinearLayout.LayoutParams(0,dp(46),1f));row.addView(load,LinearLayout.LayoutParams(dp(92),dp(46)));root.addView(row)
+
         chart=WebView(this).apply{settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK);webViewClient=object:WebViewClient(){override fun onPageFinished(view:WebView?,url:String?){chartReady=true;initChart()}};loadUrl("file:///android_asset/chart.html")};root.addView(chart,LinearLayout.LayoutParams(-1,dp(300)))
         counter=text("Calls: ${usage()}/500",11f,true);root.addView(counter)
-        val run=Button(this).apply{text="RUN WEIGHTED ANALYSIS";setTextColor(Color.BLACK);setBackgroundColor(Color.WHITE);setOnClickListener{analyze()}};root.addView(run,LinearLayout.LayoutParams(-1,dp(50)))
-        status=text("Interactive chart ready. Run analysis for Entry / SL / TP.",11f);status?.setPadding(0,dp(8),0,0);root.addView(status)
-        sp.onItemSelectedListener=Sel{symbol=symbols[it];changeMarket()};tf.onItemSelectedListener=Sel{period=periods[it];changeMarket()}
-        val p=WindowManager.LayoutParams(dp(360),dp(610),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.END;x=dp(8);y=dp(55)};wm.addView(root,p)
+        val run=Button(this).apply{text="RUN WEIGHTED ANALYSIS";setTextColor(Color.BLACK);setBackgroundColor(Color.WHITE);setOnClickListener{applySymbol();analyze()}};root.addView(run,LinearLayout.LayoutParams(-1,dp(50)))
+        status=text("Type any supported forex/commodity symbol. Gold = XAUUSD.",11f);status?.setPadding(0,dp(8),0,0);root.addView(status)
+        tf.onItemSelectedListener=Sel{period=periods[it];changeMarket()}
+        val p=WindowManager.LayoutParams(dp(360),dp(660),type(),WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.END;x=dp(8);y=dp(45);softInputMode=WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE}
+        wm.addView(root,p)
     }
 
-    private fun initChart(){if(!chartReady)return;val key=prefs.getString("api_key","").orEmpty();if(key.isBlank())return;val socket=prefs.getString("socket_key","").orEmpty();chart?.evaluateJavascript("initLiveChart(${JSONObject.quote(key)},${JSONObject.quote(symbol)},${JSONObject.quote(period)},${JSONObject.quote(socket)})",null)}
-    private fun changeMarket(){if(chartReady)chart?.evaluateJavascript("changeMarket(${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null)}
-    private fun hidePanel(){panel?.let{runCatching{wm.removeView(it)}};panel=null;chart=null;status=null;counter=null;chartReady=false}
+    private fun applySymbol(){
+        val s=symbolEdit?.text?.toString().orEmpty().trim().uppercase().replace("/","").replace(" ","")
+        if(s.isNotBlank()){symbol=s;symbolEdit?.setText(s);prefs.edit().putString("selected_symbol",s).apply()}
+    }
+    private fun initChart(){if(!chartReady)return;val key=prefs.getString("api_key","").orEmpty();if(key.isBlank())return;applySymbol();val socket=prefs.getString("socket_key","").orEmpty();chart?.evaluateJavascript("initLiveChart(${JSONObject.quote(key)},${JSONObject.quote(symbol)},${JSONObject.quote(period)},${JSONObject.quote(socket)})",null)}
+    private fun changeMarket(){if(!chartReady)return;applySymbol();chart?.evaluateJavascript("changeMarket(${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null)}
+    private fun hidePanel(){panel?.let{runCatching{wm.removeView(it)}};panel=null;chart=null;status=null;counter=null;symbolEdit=null;chartReady=false}
 
     private fun analyze(){
         if(busy)return
+        applySymbol()
         val key=prefs.getString("api_key","").orEmpty().trim()
         if(key.isBlank()){status?.text="API key missing";return}
         if(usage()>=500){status?.text="500/500 monthly calls reached";return}
@@ -103,14 +123,10 @@ class OverlayService : Service() {
 
     private fun format(s:Signal?):String{
         if(s==null) return "WAIT / NO EDGE\nBUY and SELL evidence is too balanced."
-        val d = if(abs(s.entry)>=100) 2 else 5
-        fun f(v:Double):String = String.format(Locale.US,"%.${d}f",v)
-        val conf = when {
-            s.score >= 80 -> "HIGH"
-            s.score >= 65 -> "MEDIUM"
-            else -> "EARLY"
-        }
-        val reasons = s.reasons.take(6).joinToString("\n") { "✓ $it" }
+        val d=if(abs(s.entry)>=100)2 else 5
+        fun f(v:Double):String=String.format(Locale.US,"%.${d}f",v)
+        val conf=when{s.score>=80->"HIGH";s.score>=65->"MEDIUM";else->"EARLY"}
+        val reasons=s.reasons.take(6).joinToString("\n"){"✓ $it"}
         return "${s.direction} • $conf • ${s.score}/100\nEntry ${f(s.entry)}\nSL ${f(s.sl)}\nTP1 ${f(s.tp1)}\nTP2 ${f(s.tp2)}\n$reasons"
     }
 
