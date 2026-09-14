@@ -7,24 +7,24 @@ import java.net.URL
 import java.net.URLEncoder
 
 object MarketClient {
-    fun browse(accessKey:String, category:String, query:String=""):List<Instrument>{
+    fun browse(accessKey:String, category:String, query:String=""):Pair<List<Instrument>,Int>{
         val q=query.trim()
         return when(category.lowercase()){
-            "forex" -> fetchForex(accessKey,"forex",q)
-            "commodity" -> fetchForex(accessKey,"commodity",q)
-            "crypto" -> fetchCrypto(accessKey,"crypto",q)
-            "futures" -> fetchCrypto(accessKey,"futures",q)
-            "dex" -> fetchCrypto(accessKey,"dex",q)
-            "stock" -> fetchStock(accessKey,"stock",q)
-            "fund" -> fetchStock(accessKey,"fund",q)
-            "index" -> fetchStock(accessKey,"index",q)
+            "forex" -> fetchForex(accessKey,"forex",q) to 1
+            "commodity" -> fetchForex(accessKey,"commodity",q) to 1
+            "crypto" -> fetchCrypto(accessKey,"crypto",q) to 1
+            "futures" -> fetchCrypto(accessKey,"futures",q) to 1
+            "dex" -> fetchCrypto(accessKey,"dex",q) to 1
+            "stock" -> fetchStock(accessKey,"stock",q) to 1
+            "fund" -> fetchStock(accessKey,"fund",q) to 1
+            "index" -> fetchStock(accessKey,"index",q) to 1
             else -> {
                 val out=mutableListOf<Instrument>()
                 out += fetchForex(accessKey,"forex",q,25)
                 out += fetchForex(accessKey,"commodity",q,25)
                 out += fetchCrypto(accessKey,"crypto",q,25)
                 out += fetchStock(accessKey,"stock",q,25)
-                out.distinctBy{it.ticker}.take(100)
+                out.distinctBy{it.ticker}.take(100) to 4
             }
         }
     }
