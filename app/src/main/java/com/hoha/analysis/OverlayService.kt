@@ -9,7 +9,6 @@ import android.graphics.drawable.GradientDrawable
 import android.os.*
 import android.view.Gravity
 import android.view.MotionEvent
-import android.view.View
 import android.view.WindowManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -22,54 +21,211 @@ import kotlin.concurrent.thread
 import kotlin.math.abs
 
 class OverlayService : Service() {
-    private lateinit var wm:WindowManager
-    private lateinit var bubble:TextView
-    private var panel:LinearLayout?=null
-    private var chart:WebView?=null
-    private var status:TextView?=null
-    private var counter:TextView?=null
-    private var ticker="FCM:EURUSD"
-    private var symbol="EURUSD"
-    private var assetType="forex"
-    private var period="15m"
-    private var chartReady=false
-    private var busy=false
-    private val prefs by lazy{getSharedPreferences("hoha",MODE_PRIVATE)}
+    private lateinit var wm: WindowManager
+    private lateinit var bubble: TextView
+    private var panel: LinearLayout? = null
+    private var chart: WebView? = null
+    private var status: TextView? = null
+    private var counter: TextView? = null
+    private var ticker = "XAUUSD"
+    private var symbol = "XAUUSD"
+    private var assetType = "commodity"
+    private var period = "15m"
+    private var chartReady = false
+    private var busy = false
+    private var dataLoading = false
+    private val prefs by lazy { getSharedPreferences("hoha", MODE_PRIVATE) }
 
-    override fun onBind(intent:Intent?)=null
-    override fun onCreate(){super.onCreate();readSelection();wm=getSystemService(WINDOW_SERVICE) as WindowManager;foreground();createBubble()}
-    private fun readSelection(){ticker=prefs.getString("selected_ticker","FCM:EURUSD").orEmpty().ifBlank{"FCM:EURUSD"};if(ticker.startsWith("FX:"))ticker="FCM:${ticker.substringAfter(':')}";symbol=prefs.getString("selected_symbol","EURUSD").orEmpty().ifBlank{"EURUSD"};assetType=prefs.getString("selected_type","forex").orEmpty().ifBlank{"forex"};period=prefs.getString("selected_period","15m").orEmpty().ifBlank{"15m"}}
-    private fun foreground(){val id="hoha";if(Build.VERSION.SDK_INT>=26)(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(id,"HOHA",NotificationManager.IMPORTANCE_LOW));val n=(if(Build.VERSION.SDK_INT>=26)Notification.Builder(this,id)else Notification.Builder(this)).setContentTitle("HOHA running").setContentText("Floating market analysis active").setSmallIcon(android.R.drawable.ic_menu_compass).build();startForeground(109,n)}
-    private fun type()=if(Build.VERSION.SDK_INT>=26)WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
-    private fun createBubble(){bubble=TextView(this).apply{text="H";textSize=24f;gravity=Gravity.CENTER;setTextColor(Color.BLACK);setTypeface(typeface,Typeface.BOLD);background=GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(Color.WHITE);setStroke(dp(2),Color.GRAY)}};val p=WindowManager.LayoutParams(dp(58),dp(58),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.START;x=dp(18);y=dp(220)};var sx=0;var sy=0;var tx=0f;var ty=0f;var moved=false;bubble.setOnTouchListener{_,e->when(e.action){MotionEvent.ACTION_DOWN->{sx=p.x;sy=p.y;tx=e.rawX;ty=e.rawY;moved=false;true};MotionEvent.ACTION_MOVE->{val dx=(e.rawX-tx).toInt();val dy=(e.rawY-ty).toInt();if(abs(dx)>dp(4)||abs(dy)>dp(4))moved=true;p.x=sx+dx;p.y=sy+dy;wm.updateViewLayout(bubble,p);true};MotionEvent.ACTION_UP->{if(!moved)toggle();true};else->false}};wm.addView(bubble,p)}
-    private fun toggle(){if(panel==null)showPanel()else hidePanel()}
-    private fun showPanel(){readSelection();val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(12));background=GradientDrawable().apply{setColor(Color.rgb(8,8,8));cornerRadius=dp(18).toFloat();setStroke(dp(1),Color.GRAY)}};panel=root;val title=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};title.addView(text("HOHA v7 • $ticker",14f,true),LinearLayout.LayoutParams(0,dp(42),1f));title.addView(Button(this).apply{text="—";setOnClickListener{hidePanel()}},LinearLayout.LayoutParams(dp(48),dp(40)));root.addView(title);chart=WebView(this).apply{settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK);webViewClient=object:WebViewClient(){override fun onPageFinished(view:WebView?,url:String?){chartReady=true;loadChartData()}};loadUrl("file:///android_asset/chart.html")};root.addView(chart,LinearLayout.LayoutParams(-1,dp(320)));counter=text("Calls: ${usage()}/500",11f,true);root.addView(counter);root.addView(Button(this).apply{text="RUN WEIGHTED ANALYSIS";setTextColor(Color.BLACK);setBackgroundColor(Color.WHITE);setOnClickListener{analyze()}},LinearLayout.LayoutParams(-1,dp(50)));status=text("$ticker • $period",11f);status?.setPadding(0,dp(8),0,0);root.addView(status);val p=WindowManager.LayoutParams(dp(360),dp(560),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.END;x=dp(8);y=dp(55)};wm.addView(root,p)}
-    private fun loadChartData(){if(!chartReady)return;val key=prefs.getString("api_key","").orEmpty().trim();if(key.isBlank())return;chart?.evaluateJavascript("showMessage(${JSONObject.quote("Loading $ticker • $period...")})",null);thread{try{val(data,credits)=FcsClient.history(key,ticker,symbol,assetType,period,180);val arr=JSONArray();data.forEach{arr.put(JSONObject().put("t",it.t).put("o",it.o).put("h",it.h).put("l",it.l).put("c",it.c).put("v",it.v))};Handler(Looper.getMainLooper()).post{add(credits);counter?.text="Calls: ${usage()}/500";chart?.evaluateJavascript("renderCandles(${JSONObject.quote(arr.toString())},${JSONObject.quote(ticker)},${JSONObject.quote(period)})",null);status?.text="$ticker • $period • ${data.size} candles"}}catch(e:Exception){Handler(Looper.getMainLooper()).post{chart?.evaluateJavascript("showMessage(${JSONObject.quote("Chart load failed: ${e.message}")})",null);status?.text="Chart failed: ${e.message}"}}}}
-    private fun hidePanel(){panel?.let{runCatching{wm.removeView(it)}};panel=null;chart=null;status=null;counter=null;chartReady=false}
-    private fun analyze(){if(busy)return;val key=prefs.getString("api_key","").orEmpty().trim();if(key.isBlank()){status?.text="API key missing";return};if(usage()>=500){status?.text="500/500 monthly calls reached";return};busy=true;status?.text="Scoring $ticker $period...";thread{try{val(data,credits)=FcsClient.history(key,ticker,symbol,assetType,period,180);add(credits);val s=AnalysisEngine.analyze(data);Handler(Looper.getMainLooper()).post{counter?.text="Calls: ${usage()}/500";showSignal(s);status?.text=format(s);busy=false}}catch(e:Exception){Handler(Looper.getMainLooper()).post{status?.text="Request failed: ${e.message}";busy=false}}}}
-    private fun showSignal(s:Signal?){if(s==null){chart?.evaluateJavascript("setSignal(null)",null);return};val j=JSONObject().put("entry",s.entry).put("sl",s.sl).put("tp1",s.tp1).put("tp2",s.tp2);chart?.evaluateJavascript("setSignal(${JSONObject.quote(j.toString())})",null)}
+    override fun onBind(intent: Intent?) = null
 
-    private fun format(s:Signal?):String {
-        if(s==null) return "WAIT / NO EDGE\nBUY and SELL evidence is too balanced."
-        val d=if(abs(s.entry)>=100) 2 else 5
-        fun f(v:Double):String=String.format(Locale.US,"%.${d}f",v)
-        val conf=when {
-            s.score>=80 -> "HIGH"
-            s.score>=65 -> "MEDIUM"
-            else -> "EARLY"
-        }
-        val reasons=s.reasons.take(6).joinToString("\n") { "✓ $it" }
-        return "${s.direction} • $conf • ${s.score}/100\n" +
-            "Entry ${f(s.entry)}\n" +
-            "SL ${f(s.sl)}\n" +
-            "TP1 ${f(s.tp1)}\n" +
-            "TP2 ${f(s.tp2)}\n" + reasons
+    override fun onCreate() {
+        super.onCreate()
+        readSelection()
+        wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        foreground()
+        createBubble()
     }
 
-    private fun month()=SimpleDateFormat("yyyy-MM",Locale.US).format(Date())
-    private fun usage():Int{val m=month();if(prefs.getString("usage_month","")!=m)prefs.edit().putString("usage_month",m).putInt("usage",0).apply();return prefs.getInt("usage",0)}
-    private fun add(n:Int)=prefs.edit().putInt("usage",usage()+n.coerceAtLeast(1)).apply()
-    private fun text(s:String,z:Float,b:Boolean=false)=TextView(this).apply{text=s;textSize=z;setTextColor(Color.WHITE);if(b)setTypeface(typeface,Typeface.BOLD)}
-    private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
-    override fun onDestroy(){hidePanel();if(::bubble.isInitialized)runCatching{wm.removeView(bubble)};super.onDestroy()}
+    private fun readSelection() {
+        val s = prefs.getString("selected_symbol", "XAUUSD").orEmpty().uppercase()
+        if (s == "BTCUSDT" || s == "BTCUSD" || s == "BTC") {
+            ticker = "BINANCE:BTCUSDT"
+            symbol = "BTCUSDT"
+            assetType = "crypto"
+        } else {
+            ticker = "XAUUSD"
+            symbol = "XAUUSD"
+            assetType = "commodity"
+        }
+        period = prefs.getString("selected_period", "15m").orEmpty().ifBlank { "15m" }
+    }
+
+    private fun foreground() {
+        val id = "hoha"
+        if (Build.VERSION.SDK_INT >= 26) {
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(NotificationChannel(id, "HOHA", NotificationManager.IMPORTANCE_LOW))
+        }
+        val n = (if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, id) else Notification.Builder(this))
+            .setContentTitle("HOHA running")
+            .setContentText("GOLD + BTC floating analysis active")
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .build()
+        startForeground(109, n)
+    }
+
+    private fun type() = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
+
+    private fun createBubble() {
+        bubble = TextView(this).apply {
+            text = "H"; textSize = 24f; gravity = Gravity.CENTER; setTextColor(Color.BLACK)
+            setTypeface(typeface, Typeface.BOLD)
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE); setStroke(dp(2), Color.GRAY) }
+        }
+        val p = WindowManager.LayoutParams(dp(58), dp(58), type(), WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.TOP or Gravity.START; x = dp(18); y = dp(220)
+        }
+        var sx = 0; var sy = 0; var tx = 0f; var ty = 0f; var moved = false
+        bubble.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { sx = p.x; sy = p.y; tx = e.rawX; ty = e.rawY; moved = false; true }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (e.rawX - tx).toInt(); val dy = (e.rawY - ty).toInt()
+                    if (abs(dx) > dp(4) || abs(dy) > dp(4)) moved = true
+                    p.x = sx + dx; p.y = sy + dy; wm.updateViewLayout(bubble, p); true
+                }
+                MotionEvent.ACTION_UP -> { if (!moved) toggle(); true }
+                else -> false
+            }
+        }
+        wm.addView(bubble, p)
+    }
+
+    private fun toggle() { if (panel == null) showPanel() else hidePanel() }
+
+    private fun showPanel() {
+        readSelection()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(12))
+            background = GradientDrawable().apply { setColor(Color.rgb(8, 8, 8)); cornerRadius = dp(18).toFloat(); setStroke(dp(1), Color.GRAY) }
+        }
+        panel = root
+        val title = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        title.addView(text("HOHA v8 • ${displayName()}", 14f, true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        title.addView(Button(this).apply { text = "—"; setOnClickListener { hidePanel() } }, LinearLayout.LayoutParams(dp(48), dp(40)))
+        root.addView(title)
+
+        chart = WebView(this).apply {
+            settings.javaScriptEnabled = true; settings.domStorageEnabled = true; setBackgroundColor(Color.BLACK)
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) { chartReady = true; loadChartData() }
+            }
+            loadUrl("file:///android_asset/chart.html")
+        }
+        root.addView(chart, LinearLayout.LayoutParams(-1, dp(320)))
+        counter = text("Calls: ${usage()}/500", 11f, true)
+        root.addView(counter)
+        root.addView(Button(this).apply {
+            text = "RUN WEIGHTED ANALYSIS"; setTextColor(Color.BLACK); setBackgroundColor(Color.WHITE); setOnClickListener { analyze() }
+        }, LinearLayout.LayoutParams(-1, dp(50)))
+        status = text("${displayName()} • $period", 11f)
+        status?.setPadding(0, dp(8), 0, 0)
+        root.addView(status)
+
+        val p = WindowManager.LayoutParams(dp(360), dp(560), type(), WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.TOP or Gravity.END; x = dp(8); y = dp(55)
+        }
+        wm.addView(root, p)
+    }
+
+    private fun displayName() = if (assetType == "commodity") "GOLD • XAUUSD" else "BTC • BTCUSDT"
+
+    private fun loadChartData() {
+        if (!chartReady || dataLoading) return
+        val key = prefs.getString("api_key", "").orEmpty().trim()
+        if (key.isBlank()) return
+        dataLoading = true
+        chart?.evaluateJavascript("showMessage(${JSONObject.quote("Loading ${displayName()} • $period...")})", null)
+        thread {
+            try {
+                val (data, credits) = FcsClient.history(key, ticker, symbol, assetType, period, 180)
+                val arr = JSONArray()
+                data.forEach { arr.put(JSONObject().put("t", it.t).put("o", it.o).put("h", it.h).put("l", it.l).put("c", it.c).put("v", it.v)) }
+                Handler(Looper.getMainLooper()).post {
+                    if (credits > 0) add(credits)
+                    counter?.text = "Calls: ${usage()}/500"
+                    chart?.evaluateJavascript("renderCandles(${JSONObject.quote(arr.toString())},${JSONObject.quote(symbol)},${JSONObject.quote(period)})", null)
+                    status?.text = "${displayName()} • $period • ${data.size} candles"
+                    dataLoading = false
+                }
+            } catch (e: Exception) {
+                Handler(Looper.getMainLooper()).post {
+                    status?.text = "Chart unavailable: ${friendlyError(e)}"
+                    dataLoading = false
+                }
+            }
+        }
+    }
+
+    private fun hidePanel() {
+        panel?.let { runCatching { wm.removeView(it) } }
+        panel = null; chart = null; status = null; counter = null; chartReady = false; dataLoading = false
+    }
+
+    private fun analyze() {
+        if (busy) return
+        if (dataLoading) { status?.text = "Market data is loading; analysis will reuse it."; return }
+        val key = prefs.getString("api_key", "").orEmpty().trim()
+        if (key.isBlank()) { status?.text = "API key missing"; return }
+        if (usage() >= 500) { status?.text = "500/500 monthly calls reached"; return }
+        busy = true
+        status?.text = "Scoring ${displayName()} $period..."
+        thread {
+            try {
+                val (data, credits) = FcsClient.history(key, ticker, symbol, assetType, period, 180)
+                if (credits > 0) add(credits)
+                val s = AnalysisEngine.analyze(data)
+                Handler(Looper.getMainLooper()).post {
+                    counter?.text = "Calls: ${usage()}/500"
+                    showSignal(s)
+                    status?.text = format(s)
+                    busy = false
+                }
+            } catch (e: Exception) {
+                Handler(Looper.getMainLooper()).post { status?.text = "Analysis unavailable: ${friendlyError(e)}"; busy = false }
+            }
+        }
+    }
+
+    private fun friendlyError(e: Exception): String {
+        val m = e.message.orEmpty()
+        return if (m.contains("rate limit", true) || m.contains("three requests", true)) "FCS cooldown active; HOHA now spaces requests automatically." else m.ifBlank { "Data error" }
+    }
+
+    private fun showSignal(s: Signal?) {
+        if (s == null) { chart?.evaluateJavascript("setSignal(null)", null); return }
+        val j = JSONObject().put("entry", s.entry).put("sl", s.sl).put("tp1", s.tp1).put("tp2", s.tp2)
+        chart?.evaluateJavascript("setSignal(${JSONObject.quote(j.toString())})", null)
+    }
+
+    private fun format(s: Signal?): String {
+        if (s == null) return "WAIT / NO EDGE\nBUY and SELL evidence is too balanced."
+        val d = if (abs(s.entry) >= 100) 2 else 5
+        fun f(v: Double): String = String.format(Locale.US, "%.${d}f", v)
+        val conf = when { s.score >= 80 -> "HIGH"; s.score >= 65 -> "MEDIUM"; else -> "EARLY" }
+        val reasons = s.reasons.take(6).joinToString("\n") { "✓ $it" }
+        return "${s.direction} • $conf • ${s.score}/100\nEntry ${f(s.entry)}\nSL ${f(s.sl)}\nTP1 ${f(s.tp1)}\nTP2 ${f(s.tp2)}\n$reasons"
+    }
+
+    private fun month() = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+    private fun usage(): Int { val m = month(); if (prefs.getString("usage_month", "") != m) prefs.edit().putString("usage_month", m).putInt("usage", 0).apply(); return prefs.getInt("usage", 0) }
+    private fun add(n: Int) { if (n > 0) prefs.edit().putInt("usage", usage() + n).apply() }
+    private fun text(s: String, z: Float, b: Boolean = false) = TextView(this).apply { text = s; textSize = z; setTextColor(Color.WHITE); if (b) setTypeface(typeface, Typeface.BOLD) }
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    override fun onDestroy() {
+        hidePanel()
+        if (::bubble.isInitialized) runCatching { wm.removeView(bubble) }
+        super.onDestroy()
+    }
 }
